@@ -159,6 +159,10 @@ void loop() {
 			// 2 capteurs
 			case CNY_FL_FL | CNY_FL_FR:
 				switch (cny_state) {
+					case CNY_ST_FL_R:
+					case CNY_ST_FR_L:
+						break;
+
 					case CNY_ST_FL:
 						cny_state = CNY_ST_FL_R,
 						move(DROITE);
@@ -185,6 +189,10 @@ void loop() {
 
 			case CNY_FL_BL | CNY_FL_BR:
 				switch (cny_state) {
+					case CNY_ST_BL_R:
+					case CNY_ST_BR_L:
+						break;
+
 					case CNY_ST_BL:
 						cny_state = CNY_ST_BL_R;
 						move(AVANT_DROITE);
@@ -200,8 +208,33 @@ void loop() {
 				break;
 			
 			// 3 ou 4 capteurs:
+			case CNY_FL_BL | CNY_FL_BR | CNY_FL_FL:
+				move(AVANT_DROITE);
+				break;
+
+			case CNY_FL_BL | CNY_FL_BR | CNY_FL_FR:
+				move(AVANT_GAUCHE);
+				break;
+
+			case CNY_FL_BL | CNY_FL_BR | CNY_FL_FL | CNY_FL_FR:
+				if (cny_state == CNY_OUTSIDE) {
+					if (millis() - cny_state_timer > 4000) {
+						move(STOP);
+						while {
+							// si on est entièrement dehors depuis plus de 4 secondes, alors on s'arrête
+							digitalWrite(LED_BUILTIN, HIGH);
+							delay(250);
+							digitalWrite(LED_BUILTIN, LOW);
+							delay(250);
+						}
+					}
+				} else {
+					cny_state = CNY_OUTSIDE;
+					cny_state_timer = 0;
+				}
+				break;
+
 			default:
-				///////////////////////////////////////////////////////////////////////////////// TODO
 				break;
 		}
   } else {
@@ -212,6 +245,7 @@ void loop() {
 				case CNY_POST_STR:
 					if (millis() - cny_state_timer > CNY_POST_DELAY) {
 						cny_state = CNY_NONE;
+						cny_state_timer = 0;
 					}
 					break;
 
