@@ -1,44 +1,49 @@
 #include "Servo.h"
 
+/// Définition des constantes
+
+// constantes servomoteurs (Sx)
 #define PIN_SERVO_L 9
 #define PIN_SERVO_R 8
 
 #define SR_STOP 1470
 #define SR_AVANT 1258
-#define SR_AVANT_MOYEN 1370
+#define SR_AVANT_LENT 1370
 #define SR_ARRIERE 1660
-#define SR_ARRIERE_MOYEN 1570
+#define SR_ARRIERE_LENT 1570
 
 #define SL_STOP 1470
 #define SL_AVANT 1790
-#define SL_AVANT_MOYEN 1575
+#define SL_AVANT_LENT 1575
 #define SL_ARRIERE 1190
-#define SL_ARRIERE_MOYEN 1340
+#define SL_ARRIERE_LENT 1340
 
-#define TR_TRG 1
-#define TR_ECH 0
-#define TC_TRG 2
-#define TC_ECH 3
-#define TL_TRG 5
-#define TL_ECH 4
+// constantes capteurs ultrasons (Tx)
+#define PIN_TR_TRG 1
+#define PIN_TR_ECH 0
+#define PIN_TC_TRG 2
+#define PIN_TC_ECH 3
+#define PIN_TL_TRG 5
+#define PIN_TL_ECH 4
 
-#define BBL A1
-#define BFL A0
-#define BBR A4
-#define BFR A5
+// constantes capteurs infrarouges (Bxx et CNY_xxx)
+#define PIN_BFL A0
+#define PIN_BFR A5
+#define PIN_BBL A1
+#define PIN_BBR A4
 
-#define CNY_SEUIL 800
-#define CNY_READ(which) (analogRead(which) > CNY_SEUIL)
-
-#define CNY_FL_FL 0b0001
-#define CNY_FL_FR 0b0010
-#define CNY_FL_BL 0b0100
-#define CNY_FL_BR 0b1000
+#define FLAG_BFL 0b0001
+#define FLAG_BFR 0b0010
+#define FLAG_BBL 0b0100
+#define FLAG_BBR 0b1000
 
 #define CNY_POST_DELAY 1000
+#define CNY_SEUIL 800
+#define CNY_READ(which) (analogRead(which) > CNY_SEUIL) // macro pour lire la valeur d'un CNY
 
-Servo servo_r, servo_l;
+/// Déclaration des enums d'état et de commande
 
+// mouvement
 enum Direction {
   AVANT,
   AVANT_MOYEN,
@@ -60,12 +65,14 @@ enum Direction {
   STOP,
 };
 
+// capteurs ultrasons
 enum Vision {
     VISION_DROIT,
     VISION_GAUCHE,
     VISION_CENTRE,
 };
 
+// capteurs infrarouges
 enum CnyState {
   CNY_ST_FL,
   CNY_ST_FR,
@@ -82,25 +89,30 @@ enum CnyState {
 
 	CNY_POST_STL,
 	CNY_POST_STR,
-  CNY_NONE,
+  CNY_ST_NONE,
+	CNY_ST_OUTSIDE,
 };
 
-CnyState cny_state = CNY_NONE;
+/// Fonctions et variables principales
+
+// variables générales
+Servo servo_r, servo_l;
+CnyState cny_state = CNY_ST_NONE;
 unsigned long cny_state_timer = 0;
 
 void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, HIGH);
 
-	pinMode(TR_TRG, OUTPUT);
-	pinMode(TR_ECH, INPUT);
-	pinMode(TC_TRG, OUTPUT);
-	pinMode(TC_ECH, INPUT);
-	pinMode(TL_TRG, OUTPUT);
-	pinMode(TL_ECH, INPUT);
+	pinMode(PIN_TR_TRG, OUTPUT);
+	pinMode(PIN_TR_ECH, INPUT);
+	pinMode(PIN_TC_TRG, OUTPUT);
+	pinMode(PIN_TC_ECH, INPUT);
+	pinMode(PIN_TL_TRG, OUTPUT);
+	pinMode(PIN_TL_ECH, INPUT);
 
   // attendre qu'une feuille blanche soit glissée sous le CNY de derrière droite
-  while (!CNY_READ(BBR));
+  while (!CNY_READ(PIN_BBR));
 
   for (byte i = 0; i<3; i++) {
 		digitalWrite(LED_BUILTIN, HIGH);
@@ -115,49 +127,48 @@ void setup() {
   servo_l.attach(PIN_SERVO_L);
   servo_l.writeMicroseconds(SL_STOP);
 
-  move(ARRIERE);
+	// faire tomber la plaque
+  move(AVANT);
+	delay(200);
+	move(ARRIERE);
 	delay(200);
 	move(STOP);
 	delay(100);
-	move(AVANT);
-	delay(200);
 }
 
 void loop() {
   byte cny_flags = 0;
-  if (CNY_READ(BFL)) cny_flags |= CNY_FL_FL;
-  if (CNY_READ(BFR)) cny_flags |= CNY_FL_FR;
-  if (CNY_READ(BBL)) cny_flags |= CNY_FL_BL;
-  if (CNY_READ(BBR)) cny_flags |= CNY_FL_BR;
-
-  //Serial.println(cny_flags);
+  if (CNY_READ(PIN_BFL)) cny_flags |= FLAG_BFL;
+  if (CNY_READ(PIN_BFR)) cny_flags |= FLAG_BFR;
+  if (CNY_READ(PIN_BBL)) cny_flags |= FLAG_BBL;
+  if (CNY_READ(PIN_BBR)) cny_flags |= FLAG_BBR;
 
   if (cny_flags != 0) {
 		switch(cny_flags) {
 
 			// 1 capteur
-			case CNY_FL_FL:
+			case FLAG_BFL:
 				cny_state = CNY_ST_FL;
 				move(DROITE);
 				break;
 
-			case CNY_FL_FR:
+			case FLAG_BFR:
 				move(GAUCHE);
 				cny_state = CNY_ST_FR;
 				break;
 
-			case CNY_FL_BL:
+			case FLAG_BBL:
 				move(AVANT_DROITE);
 				cny_state = CNY_ST_BL;
 				break;
 
-			case CNY_FL_BR:
+			case FLAG_BBR:
 				move(AVANT_GAUCHE);
 				cny_state = CNY_ST_BR;
 				break;
 
 			// 2 capteurs
-			case CNY_FL_FL | CNY_FL_FR:
+			case FLAG_BFL | FLAG_BFR:
 				switch (cny_state) {
 					case CNY_ST_FL_R:
 					case CNY_ST_FR_L:
@@ -168,7 +179,7 @@ void loop() {
 						move(DROITE);
 						break;
 
-					case CNY_NONE: // par défaut : on tourne à gauche
+					case CNY_ST_NONE: // par défaut : on tourne à gauche
 					case CNY_ST_FR:
 					default:
 						cny_state = CNY_ST_FR_L,
@@ -177,17 +188,17 @@ void loop() {
 				}
 				break;
 
-			case CNY_FL_FL | CNY_FL_BL:
+			case FLAG_BFL | FLAG_BBL:
 				move(AVANT_DROITE);
 				cny_state = CNY_ST_LALL;
 				break;
 
-			case CNY_FL_FR | CNY_FL_BR:
+			case FLAG_BFR | FLAG_BBR:
 				move(AVANT_GAUCHE);
 				cny_state = CNY_ST_RALL;
 				break;
 
-			case CNY_FL_BL | CNY_FL_BR:
+			case FLAG_BBL | FLAG_BBR:
 				switch (cny_state) {
 					case CNY_ST_BL_R:
 					case CNY_ST_BR_L:
@@ -198,7 +209,7 @@ void loop() {
 						move(AVANT_DROITE);
 						break;
 
-					case CNY_NONE: // par défaut : on tourne à droite
+					case CNY_ST_NONE: // par défaut : on tourne à droite
 					case CNY_ST_BR:
 					default:
 						cny_state = CNY_ST_BR_L,
@@ -208,19 +219,19 @@ void loop() {
 				break;
 			
 			// 3 ou 4 capteurs:
-			case CNY_FL_BL | CNY_FL_BR | CNY_FL_FL:
+			case FLAG_BBL | FLAG_BBR | FLAG_BFL:
 				move(AVANT_DROITE);
 				break;
 
-			case CNY_FL_BL | CNY_FL_BR | CNY_FL_FR:
+			case FLAG_BBL | FLAG_BBR | FLAG_BFR:
 				move(AVANT_GAUCHE);
 				break;
 
-			case CNY_FL_BL | CNY_FL_BR | CNY_FL_FL | CNY_FL_FR:
-				if (cny_state == CNY_OUTSIDE) {
+			case FLAG_BBL | FLAG_BBR | FLAG_BFL | FLAG_BFR:
+				if (cny_state == CNY_ST_OUTSIDE) {
 					if (millis() - cny_state_timer > 4000) {
 						move(STOP);
-						while {
+						while(true) {
 							// si on est entièrement dehors depuis plus de 4 secondes, alors on s'arrête
 							digitalWrite(LED_BUILTIN, HIGH);
 							delay(250);
@@ -229,7 +240,7 @@ void loop() {
 						}
 					}
 				} else {
-					cny_state = CNY_OUTSIDE;
+					cny_state = CNY_ST_OUTSIDE;
 					cny_state_timer = 0;
 				}
 				break;
@@ -238,13 +249,13 @@ void loop() {
 				break;
 		}
   } else {
-		if (cny_state != CNY_NONE) {
+		if (cny_state != CNY_ST_NONE) {
 			switch (cny_state) {
 				// une fois le recentrage terminé
 				case CNY_POST_STL:
 				case CNY_POST_STR:
 					if (millis() - cny_state_timer > CNY_POST_DELAY) {
-						cny_state = CNY_NONE;
+						cny_state = CNY_ST_NONE;
 						cny_state_timer = 0;
 					}
 					break;
@@ -274,6 +285,9 @@ void loop() {
   }
 }
 
+/// Fonctions utilitaires
+
+// déplacement
 void move(Direction direction) {
   switch (direction) {
 		case AVANT:
@@ -281,19 +295,19 @@ void move(Direction direction) {
 			servo_l.writeMicroseconds(SL_AVANT);
 			break;
 		case AVANT_MOYEN:
-			servo_r.writeMicroseconds(SR_AVANT_MOYEN);
-			servo_l.writeMicroseconds(SL_AVANT_MOYEN);
+			servo_r.writeMicroseconds(SR_AVANT_LENT);
+			servo_l.writeMicroseconds(SL_AVANT_LENT);
 			break;
 		case AVANT_GAUCHE:
 			servo_r.writeMicroseconds(SR_AVANT);
-			servo_l.writeMicroseconds(SL_AVANT_MOYEN);
+			servo_l.writeMicroseconds(SL_AVANT_LENT);
 			break;
 		case AVANT_GAUCHE_FORT:
 			servo_r.writeMicroseconds(SR_AVANT);
 			servo_l.writeMicroseconds(SL_STOP);
 			break;
 		case AVANT_DROITE:
-			servo_r.writeMicroseconds(SR_AVANT_MOYEN);
+			servo_r.writeMicroseconds(SR_AVANT_LENT);
 			servo_l.writeMicroseconds(SL_AVANT);
 			break;
 		case AVANT_DROITE_FORT:
@@ -306,19 +320,19 @@ void move(Direction direction) {
 			servo_l.writeMicroseconds(SL_ARRIERE);
 			break;
 		case ARRIERE_MOYEN:
-			servo_r.writeMicroseconds(SR_ARRIERE_MOYEN);
-			servo_l.writeMicroseconds(SL_ARRIERE_MOYEN);
+			servo_r.writeMicroseconds(SR_ARRIERE_LENT);
+			servo_l.writeMicroseconds(SL_ARRIERE_LENT);
 			break;
 		case ARRIERE_GAUCHE:
 			servo_r.writeMicroseconds(SR_ARRIERE);
-			servo_l.writeMicroseconds(SL_ARRIERE_MOYEN);
+			servo_l.writeMicroseconds(SL_ARRIERE_LENT);
 			break;
 		case ARRIERE_GAUCHE_FORT:
 			servo_r.writeMicroseconds(SR_ARRIERE);
 			servo_l.writeMicroseconds(SL_STOP);
 			break;
 		case ARRIERE_DROITE:
-			servo_r.writeMicroseconds(SR_ARRIERE_MOYEN);
+			servo_r.writeMicroseconds(SR_ARRIERE_LENT);
 			servo_l.writeMicroseconds(SL_ARRIERE);
 			break;
 		case ARRIERE_DROITE_FORT:
@@ -342,22 +356,23 @@ void move(Direction direction) {
   }
 }
 
+// mesure de distance
 float distance(Vision vision) {
 	float duration_us, distance_cm;
 	int pin_echo, pin_trig;
   
 	switch (vision) {
     case VISION_GAUCHE:
-      pin_echo = TL_ECH;
-      pin_trig = TL_TRG;
+      pin_echo = PIN_TL_ECH;
+      pin_trig = PIN_TL_TRG;
      break;
     case VISION_CENTRE:
-      pin_echo = TC_ECH;
-      pin_trig = TC_TRG;
+      pin_echo = PIN_TC_ECH;
+      pin_trig = PIN_TC_TRG;
      break;
     case DROITE:
-      pin_echo = TR_ECH;
-      pin_trig = TR_TRG;
+      pin_echo = PIN_TR_ECH;
+      pin_trig = PIN_TR_TRG;
      break;
 	}
 	
