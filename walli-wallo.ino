@@ -22,6 +22,9 @@
 #define TL_TRG 5
 #define TL_ECH 4
 
+#define HC_FRONTIERE_HAUT 4706
+#define HC_FRONTIERE_BAS 1177
+
 #define BBL A1
 #define BFL A0
 #define BBR A4
@@ -66,6 +69,12 @@ enum Vision {
     VISION_CENTRE,
 };
 
+enum Distance {
+  RIEN,
+  PROCHE,
+  LOIN,
+};
+
 enum CnyState {
   CNY_ST_FL,
   CNY_ST_FR,
@@ -83,8 +92,15 @@ enum CnyState {
 	CNY_POST_STL,
 	CNY_POST_STR,
   CNY_NONE,
+	CNY_OUTSIDE,
 };
 
+enum Etat_ia {
+  ATTAQUE,
+  RECHERCHE,
+};
+
+Etat_ia etat_ia = RECHERCHE;
 CnyState cny_state = CNY_NONE;
 unsigned long cny_state_timer = 0;
 
@@ -129,8 +145,6 @@ void loop() {
   if (CNY_READ(BFR)) cny_flags |= CNY_FL_FR;
   if (CNY_READ(BBL)) cny_flags |= CNY_FL_BL;
   if (CNY_READ(BBR)) cny_flags |= CNY_FL_BR;
-
-  //Serial.println(cny_flags);
 
   if (cny_flags != 0) {
 		switch(cny_flags) {
@@ -220,7 +234,7 @@ void loop() {
 				if (cny_state == CNY_OUTSIDE) {
 					if (millis() - cny_state_timer > 4000) {
 						move(STOP);
-						while {
+						while(true) {
 							// si on est entièrement dehors depuis plus de 4 secondes, alors on s'arrête
 							digitalWrite(LED_BUILTIN, HIGH);
 							delay(250);
@@ -269,8 +283,83 @@ void loop() {
 					break;
 			}
 		} else {
-			move(AVANT_MOYEN);
-		}
+       Distance DIST_GAUCHE = distance(VISION_GAUCHE);
+       Distance DIST_CENTRE = distance(VISION_CENTRE);
+       Distance DIST_DROITE = distance(VISION_DROIT);
+ 
+       switch(DIST_GAUCHE + DIST_CENTRE*3 + DIST_DROITE*9){
+         //1 
+         case 2:
+           if (etat_ia = RECHERCHE) {
+             move(GAUCHE);
+           } else {
+             move(GAUCHE);
+             etat_ia = ATTAQUE;
+           }
+           break;
+           
+        //2 
+        case 6:
+        case 8:
+           if (etat_ia = RECHERCHE) {
+             move(GAUCHE);
+           } else {
+             move(AVANT_DROITE);
+           }
+           break;
+           
+         //3 
+        case 18:
+        case 24:
+           if (etat_ia = RECHERCHE) {
+             move(AVANT);
+             etat_ia = ATTAQUE;
+           } else {
+             move(AVANT);
+           }
+          break;
+        
+        //4 
+        case 1:
+        case 4:
+        case 5:
+        case 7:
+           move(GAUCHE);
+           break;
+        
+        //5 
+        case 3:
+          if (etat_ia = RECHERCHE) {
+             move(AVANT);
+             etat_ia = ATTAQUE;
+           } else {
+             move(AVANT_MOYEN);
+           }
+          break;
+        
+        //6 
+        case 9:
+        case 12:
+        case 15:
+        case 21:
+          if (etat_ia = RECHERCHE) {
+             move(DROITE);
+             etat_ia = ATTAQUE;
+           } else {
+             move(AVANT_DROITE_FORT);
+           }
+           break;
+        
+        //0
+        default:
+          if (etat_ia = RECHERCHE) {
+            move(GAUCHE);
+          } else {
+            move(DROITE);
+          }
+          break;
+      }
+    }
   }
 }
 
@@ -342,31 +431,38 @@ void move(Direction direction) {
   }
 }
 
-float distance(Vision vision) {
-	float duration_us, distance_cm;
-	int pin_echo, pin_trig;
-  
-	switch (vision) {
+Distance distance(Vision vision) {
+float duration_us;
+int T_ECH, T_TRG;
+    switch (vision) {
     case VISION_GAUCHE:
-      pin_echo = TL_ECH;
-      pin_trig = TL_TRG;
+       T_ECH = TL_ECH;
+       T_TRG = TL_TRG;
      break;
     case VISION_CENTRE:
-      pin_echo = TC_ECH;
-      pin_trig = TC_TRG;
+       T_ECH = TC_ECH;
+       T_TRG = TC_TRG;
      break;
-    case DROITE:
-      pin_echo = TR_ECH;
-      pin_trig = TR_TRG;
+    case VISION_DROIT:
+       T_ECH = TR_ECH;
+       T_TRG = TR_TRG;
      break;
-	}
-	
-	digitalWrite(pin_trig, HIGH);
-	delayMicroseconds(10);
-	digitalWrite(pin_trig, LOW);
-
-	duration_us = pulseIn(pin_echo, HIGH, 10000);
-	distance_cm = 0.017 * duration_us;
-	
-	return(distance_cm);
 }
+  digitalWrite(T_TRG, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(T_TRG, LOW);
+
+
+  duration_us = pulseIn(T_ECH, HIGH);
+  if((HC_FRONTIERE_BAS < duration_us) && (duration_us < HC_FRONTIERE_HAUT)){
+    return(LOIN);
+  }
+  else if((0 < duration_us ) && (duration_us < HC_FRONTIERE_BAS)){
+    return(PROCHE);
+  }
+  else {
+    return(RIEN);
+    
+  }
+ }
+
