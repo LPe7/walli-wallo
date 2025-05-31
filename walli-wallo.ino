@@ -26,6 +26,9 @@
 #define PIN_TL_TRG 5
 #define PIN_TL_ECH 4
 
+#define HC_SEUIL_LOIN 4706
+#define HC_SEUIL_PROCHE 1177
+
 // constantes capteurs infrarouges (Bxx et CNY_xxx)
 #define PIN_BFL A0
 #define PIN_BFR A5
@@ -65,11 +68,18 @@ enum Direction {
   STOP,
 };
 
-// capteurs ultrasons
+// position capteurs ultrasons
 enum Vision {
     VISION_DROIT,
     VISION_GAUCHE,
     VISION_CENTRE,
+};
+
+// distance capteurs ultrasons
+enum Distance {
+  RIEN,
+  PROCHE,
+  LOIN,
 };
 
 // capteurs infrarouges
@@ -89,13 +99,21 @@ enum CnyState {
 
 	CNY_POST_STL,
 	CNY_POST_STR,
+
   CNY_ST_NONE,
 	CNY_ST_OUTSIDE,
+};
+
+// état de l'exécution
+enum Etat_ia {
+  ATTAQUE,
+  RECHERCHE,
 };
 
 /// Fonctions et variables principales
 
 // variables générales
+Etat_ia etat_ia = RECHERCHE;
 Servo servo_r, servo_l;
 CnyState cny_state = CNY_ST_NONE;
 unsigned long cny_state_timer = 0;
@@ -280,8 +298,83 @@ void loop() {
 					break;
 			}
 		} else {
-			move(AVANT_MOYEN);
-		}
+       Distance DIST_GAUCHE = distance(VISION_GAUCHE);
+       Distance DIST_CENTRE = distance(VISION_CENTRE);
+       Distance DIST_DROITE = distance(VISION_DROIT);
+ 
+       switch(DIST_GAUCHE + DIST_CENTRE*3 + DIST_DROITE*9){
+         //1 
+         case 2:
+           if (etat_ia = RECHERCHE) {
+             move(GAUCHE);
+           } else {
+             move(GAUCHE);
+             etat_ia = ATTAQUE;
+           }
+           break;
+           
+        //2 
+        case 6:
+        case 8:
+           if (etat_ia = RECHERCHE) {
+             move(GAUCHE);
+           } else {
+             move(AVANT_DROITE);
+           }
+           break;
+           
+         //3 
+        case 18:
+        case 24:
+           if (etat_ia = RECHERCHE) {
+             move(AVANT);
+             etat_ia = ATTAQUE;
+           } else {
+             move(AVANT);
+           }
+          break;
+        
+        //4 
+        case 1:
+        case 4:
+        case 5:
+        case 7:
+           move(GAUCHE);
+           break;
+        
+        //5 
+        case 3:
+          if (etat_ia = RECHERCHE) {
+             move(AVANT);
+             etat_ia = ATTAQUE;
+           } else {
+             move(AVANT_MOYEN);
+           }
+          break;
+        
+        //6 
+        case 9:
+        case 12:
+        case 15:
+        case 21:
+          if (etat_ia = RECHERCHE) {
+             move(DROITE);
+             etat_ia = ATTAQUE;
+           } else {
+             move(AVANT_DROITE_FORT);
+           }
+           break;
+        
+        //0
+        default:
+          if (etat_ia = RECHERCHE) {
+            move(GAUCHE);
+          } else {
+            move(DROITE);
+          }
+          break;
+      }
+    }
   }
 }
 
@@ -356,32 +449,36 @@ void move(Direction direction) {
   }
 }
 
-// mesure de distance
-float distance(Vision vision) {
-	float duration_us, distance_cm;
-	int pin_echo, pin_trig;
-  
-	switch (vision) {
-    case VISION_GAUCHE:
-      pin_echo = PIN_TL_ECH;
-      pin_trig = PIN_TL_TRG;
-     break;
-    case VISION_CENTRE:
-      pin_echo = PIN_TC_ECH;
-      pin_trig = PIN_TC_TRG;
-     break;
-    case DROITE:
-      pin_echo = PIN_TR_ECH;
-      pin_trig = PIN_TR_TRG;
-     break;
-	}
-	
-	digitalWrite(pin_trig, HIGH);
-	delayMicroseconds(10);
-	digitalWrite(pin_trig, LOW);
+Distance distance(Vision vision) {
+	float duration_us;
+	int T_ECH, T_TRG;
+    switch (vision) {
+  	  case VISION_GAUCHE:
+				T_ECH = TL_ECH;
+				T_TRG = TL_TRG;
+				break;
 
-	duration_us = pulseIn(pin_echo, HIGH, 10000);
-	distance_cm = 0.017 * duration_us;
-	
-	return(distance_cm);
-}
+			case VISION_CENTRE:
+				T_ECH = TC_ECH;
+				T_TRG = TC_TRG;
+				break;
+
+			case VISION_DROIT:
+				T_ECH = TR_ECH;
+				T_TRG = TR_TRG;
+				break;
+		}
+
+		digitalWrite(T_TRG, HIGH);
+		delayMicroseconds(10);
+		digitalWrite(T_TRG, LOW);
+
+		duration_us = pulseIn(T_ECH, HIGH);
+		if((HC_SEUIL_PROCHE < duration_us) && (duration_us < HC_SEUIL_LOIN))
+			return(LOIN);
+		else if((0 < duration_us ) && (duration_us < HC_SEUIL_PROCHE)){
+			return(PROCHE);
+		else
+			return(RIEN);
+ }
+
