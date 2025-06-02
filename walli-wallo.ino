@@ -35,6 +35,8 @@
 #define FLAG_TC     0b001100
 #define FLAG_TR     0b000011
 
+#define HC_MESURE_DELAY 200
+
 // constantes capteurs infrarouges (Bxx et CNY_xxx)
 #define PIN_BFL A0
 #define PIN_BFR A5
@@ -81,11 +83,12 @@ enum Vision {
     VISION_CENTRE,
 };
 
-// position capteurs ultrasons
-typedef byte Position;
+// flags des capteurs ultrasons et infrarouges
+typedef byte PositionFlags;
+typedef byte CnyFlags;
 
-// capteurs infrarouges
-enum CnyState {
+// état de l'exécution
+enum State {
   CNY_ST_FL,
   CNY_ST_FR,
   CNY_ST_FL_R,
@@ -102,12 +105,8 @@ enum CnyState {
   CNY_POST_STL,
   CNY_POST_STR,
 
-  CNY_ST_NONE,
   CNY_ST_OUTSIDE,
-};
 
-// état de l'exécution
-enum Etat_ia {
   ATTAQUE,
   RECHERCHE,
 };
@@ -115,11 +114,270 @@ enum Etat_ia {
 /// Fonctions et variables principales
 
 // variables générales
-Etat_ia etat_ia = RECHERCHE;
 Servo servo_r, servo_l;
-CnyState cny_state = CNY_ST_NONE;
-unsigned long cny_state_timer = 0;
+State state = RECHERCHE;
+unsigned long state_timer = 0;
+PositionFlags adversaire = 0;
 
+// fonctions de mode
+void handle_cny(CnyFlags cny_flags) {
+  // pousser jusqu'au bout si on est en mode attaque
+  if (state == ATTAQUE) {
+    switch (cny_flags) {
+      case FLAG_BFL:
+      case FLAG_BFR:
+      case FLAG_BFL | FLAG_BFR:
+        handle_attaque();
+        return;
+    }
+  }
+
+  switch(cny_flags) {
+
+    // 1 capteur
+    case FLAG_BFL:
+      state = CNY_ST_FL;
+      move(DROITE);
+      break;
+
+    case FLAG_BFR:
+      move(GAUCHE);
+      state = CNY_ST_FR;
+      break;
+
+    case FLAG_BBL:
+      move(AVANT_DROITE);
+      state = CNY_ST_BL;
+      break;
+
+    case FLAG_BBR:
+      move(AVANT_GAUCHE);
+      state = CNY_ST_BR;
+      break;
+
+    // 2 capteurs
+    case FLAG_BFL | FLAG_BFR:
+      switch (state) {
+        case CNY_ST_FL_R:
+        case CNY_ST_FR_L:
+          break;
+
+        case CNY_ST_FL:
+          state = CNY_ST_FL_R,
+          move(DROITE);
+          break;
+
+        case RECHERCHE:
+        case ATTAQUE: // par défaut : on tourne à gauche
+        case CNY_ST_FR:
+        default:
+          state = CNY_ST_FR_L,
+          move(GAUCHE);
+          break;
+      }
+      break;
+
+    case FLAG_BFL | FLAG_BBL:
+      move(AVANT_DROITE);
+      state = CNY_ST_LALL;
+      break;
+
+    case FLAG_BFR | FLAG_BBR:
+      move(AVANT_GAUCHE);
+      state = CNY_ST_RALL;
+      break;
+
+    case FLAG_BBL | FLAG_BBR:
+      switch (state) {
+        case CNY_ST_BL_R:
+        case CNY_ST_BR_L:
+          break;
+
+        case CNY_ST_BL:
+          state = CNY_ST_BL_R;
+          move(AVANT_DROITE);
+          break;
+
+        case RECHERCHE:
+        case ATTAQUE: // par défaut : on tourne à droite
+        case CNY_ST_BR:
+        default:
+          state = CNY_ST_BR_L,
+          move(AVANT_GAUCHE);
+          break;
+      }
+      break;
+
+    // 3 ou 4 capteurs:
+    case FLAG_BBL | FLAG_BBR | FLAG_BFL:
+      move(AVANT_DROITE);
+      break;
+
+    case FLAG_BBL | FLAG_BBR | FLAG_BFR:
+      move(AVANT_GAUCHE);
+      break;
+
+    case FLAG_BBL | FLAG_BBR | FLAG_BFL | FLAG_BFR:
+      if (state == CNY_ST_OUTSIDE) {
+        if (millis() - state_timer > 4000) {
+          move(STOP);
+          while(true) {
+            // si on est entièrement dehors depuis plus de 4 secondes, alors on s'arrête
+            digitalWrite(LED_BUILTIN, HIGH);
+            delay(100);
+            digitalWrite(LED_BUILTIN, LOW);
+            delay(50);
+            digitalWrite(LED_BUILTIN, HIGH);
+            delay(100);
+            digitalWrite(LED_BUILTIN, LOW);
+            delay(250);
+          }
+        }
+      } else {
+        state = CNY_ST_OUTSIDE;
+        state_timer = millis();
+      }
+      break;
+
+    default:
+      break;
+  }
+}
+
+void handle_recentrage() {
+  switch (state) {
+    // une fois le recentrage terminé
+    case CNY_POST_STL:
+    case CNY_POST_STR:
+      if (millis() - state_timer > CNY_POST_DELAY) {
+        state = RECHERCHE;
+        state_timer = millis();
+      }
+      break;
+
+    // on revient vers le centre à droite
+    case CNY_ST_FL:
+    case CNY_ST_BL:
+    case CNY_ST_LALL:
+      state = CNY_POST_STL;
+      state_timer = millis();
+      move(AVANT_DROITE_FORT);
+      break;
+
+    // par défaut
+    // on revient vers le centre à gauche
+    case CNY_ST_FR:
+    case CNY_ST_BR:
+    case CNY_ST_RALL:
+      state = CNY_POST_STR;
+      state_timer = millis();
+      move(AVANT_GAUCHE_FORT);
+      break;
+  }
+}
+
+void handle_attaque() {
+  seek_adversaire();
+
+  switch (adversaire) {
+    // zone 1 : loin gauche
+    case FLAG_LOIN & FLAG_TL:
+      move(GAUCHE);
+      break;
+
+    // zone 2 : loin centre-gauche
+    case FLAG_LOIN & FLAG_TC:
+    case FLAG_LOIN & (FLAG_TL | FLAG_TC):
+      move(AVANT_DROITE);
+      break;
+
+    // zone 3 : loin droite et centre-droite
+    case FLAG_LOIN & FLAG_TR:
+    case FLAG_LOIN & (FLAG_TC | FLAG_TR):
+      move(AVANT);
+      break;
+
+    // zone 4 : proche gauche et centre-gauche
+    case FLAG_PROCHE & FLAG_TL:
+    case FLAG_PROCHE & (FLAG_TL | FLAG_TC):
+    case (FLAG_PROCHE & FLAG_TL) | (FLAG_LOIN & FLAG_TC):
+    case (FLAG_LOIN & FLAG_TL) | (FLAG_PROCHE & FLAG_TC):
+      move(GAUCHE);
+      break;
+
+    // zone 5 : proche centre
+    case FLAG_PROCHE & FLAG_TC:
+      move(AVANT_LENT);
+      break;
+
+    // zone 6 : proche droite et centre-droite
+    case FLAG_PROCHE & FLAG_TR:
+    case FLAG_PROCHE & (FLAG_TC | FLAG_TR):
+    case (FLAG_LOIN & FLAG_TC) | (FLAG_PROCHE & FLAG_TR):
+    case (FLAG_PROCHE & FLAG_TC) | (FLAG_LOIN & FLAG_TR):
+      move(AVANT_DROITE_FORT);
+      break;
+
+    // autre, incohérent ou inconnu
+    case 0:
+    default:
+      move(DROITE);
+      break;
+  }
+}
+
+void handle_recherche() {
+  seek_adversaire();
+
+  switch (adversaire) {
+    // zone 1
+    case FLAG_LOIN & FLAG_TL:
+      state = ATTAQUE;
+    // zone 2
+    case FLAG_LOIN & FLAG_TC:
+    case FLAG_LOIN & (FLAG_TL | FLAG_TC):
+      move(GAUCHE);
+      break;
+
+    // zone 3
+    case FLAG_LOIN & FLAG_TR:
+    case FLAG_LOIN & (FLAG_TC | FLAG_TR):
+      move(AVANT);
+      state = ATTAQUE;
+      break;
+
+    // zone 4
+    case FLAG_PROCHE & FLAG_TL:
+    case FLAG_PROCHE & (FLAG_TL | FLAG_TC):
+    case (FLAG_PROCHE & FLAG_TL) | (FLAG_LOIN & FLAG_TC):
+    case (FLAG_LOIN & FLAG_TL) | (FLAG_PROCHE & FLAG_TC):
+      move(GAUCHE);
+      break;
+
+    // zone 5
+    case FLAG_PROCHE & FLAG_TC:
+      move(AVANT);
+      state = ATTAQUE;
+      break;
+
+    // zone 6
+    case FLAG_PROCHE & FLAG_TR:
+    case FLAG_PROCHE & (FLAG_TC | FLAG_TR):
+    case (FLAG_LOIN & FLAG_TC) | (FLAG_PROCHE & FLAG_TR):
+    case (FLAG_PROCHE & FLAG_TC) | (FLAG_LOIN & FLAG_TR):
+      move(DROITE);
+      state = ATTAQUE;
+      break;
+
+    // autre, incohérent ou inconnu
+    case 0:
+    default:
+      move(GAUCHE);
+      break;
+  }
+}
+
+// fonctions de base
 void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, HIGH);
@@ -157,248 +415,28 @@ void setup() {
 }
 
 void loop() {
-  byte cny_flags = 0;
+  CnyFlags cny_flags = 0;
   if (CNY_READ(PIN_BFL)) cny_flags |= FLAG_BFL;
   if (CNY_READ(PIN_BFR)) cny_flags |= FLAG_BFR;
   if (CNY_READ(PIN_BBL)) cny_flags |= FLAG_BBL;
   if (CNY_READ(PIN_BBR)) cny_flags |= FLAG_BBR;
 
   if (cny_flags != 0) {
-    switch(cny_flags) {
-
-      // 1 capteur
-      case FLAG_BFL:
-        cny_state = CNY_ST_FL;
-        move(DROITE);
-        break;
-
-      case FLAG_BFR:
-        move(GAUCHE);
-        cny_state = CNY_ST_FR;
-        break;
-
-      case FLAG_BBL:
-        move(AVANT_DROITE);
-        cny_state = CNY_ST_BL;
-        break;
-
-      case FLAG_BBR:
-        move(AVANT_GAUCHE);
-        cny_state = CNY_ST_BR;
-        break;
-
-      // 2 capteurs
-      case FLAG_BFL | FLAG_BFR:
-        switch (cny_state) {
-          case CNY_ST_FL_R:
-          case CNY_ST_FR_L:
-            break;
-
-          case CNY_ST_FL:
-            cny_state = CNY_ST_FL_R,
-            move(DROITE);
-            break;
-
-          case CNY_ST_NONE: // par défaut : on tourne à gauche
-          case CNY_ST_FR:
-          default:
-            cny_state = CNY_ST_FR_L,
-            move(GAUCHE);
-            break;
-        }
-        break;
-
-      case FLAG_BFL | FLAG_BBL:
-        move(AVANT_DROITE);
-        cny_state = CNY_ST_LALL;
-        break;
-
-      case FLAG_BFR | FLAG_BBR:
-        move(AVANT_GAUCHE);
-        cny_state = CNY_ST_RALL;
-        break;
-
-      case FLAG_BBL | FLAG_BBR:
-        switch (cny_state) {
-          case CNY_ST_BL_R:
-          case CNY_ST_BR_L:
-            break;
-
-          case CNY_ST_BL:
-            cny_state = CNY_ST_BL_R;
-            move(AVANT_DROITE);
-            break;
-
-          case CNY_ST_NONE: // par défaut : on tourne à droite
-          case CNY_ST_BR:
-          default:
-            cny_state = CNY_ST_BR_L,
-            move(AVANT_GAUCHE);
-            break;
-        }
-        break;
-
-      // 3 ou 4 capteurs:
-      case FLAG_BBL | FLAG_BBR | FLAG_BFL:
-        move(AVANT_DROITE);
-        break;
-
-      case FLAG_BBL | FLAG_BBR | FLAG_BFR:
-        move(AVANT_GAUCHE);
-        break;
-
-      case FLAG_BBL | FLAG_BBR | FLAG_BFL | FLAG_BFR:
-        if (cny_state == CNY_ST_OUTSIDE) {
-          if (millis() - cny_state_timer > 4000) {
-            move(STOP);
-            while(true) {
-              // si on est entièrement dehors depuis plus de 4 secondes, alors on s'arrête
-              digitalWrite(LED_BUILTIN, HIGH);
-              delay(250);
-              digitalWrite(LED_BUILTIN, LOW);
-              delay(250);
-            }
-          }
-        } else {
-          cny_state = CNY_ST_OUTSIDE;
-          cny_state_timer = 0;
-        }
-        break;
-
-      default:
-        break;
-    }
+    handle_cny(cny_flags);
   } else {
-    if (cny_state != CNY_ST_NONE) {
-      switch (cny_state) {
-        // une fois le recentrage terminé
-        case CNY_POST_STL:
-        case CNY_POST_STR:
-          if (millis() - cny_state_timer > CNY_POST_DELAY) {
-            cny_state = CNY_ST_NONE;
-            cny_state_timer = 0;
-          }
-          break;
+    switch (state) {
+      case RECHERCHE:
+        handle_recherche();
+        break;
 
-        // on revient vers le centre à droite
-        case CNY_ST_FL:
-        case CNY_ST_BL:
-        case CNY_ST_LALL:
-          cny_state = CNY_POST_STL;
-          cny_state_timer = millis();
-          move(AVANT_DROITE_FORT);
-          break;
+      case ATTAQUE:
+        handle_attaque();
+        break;
 
-        // par défaut
-        // on revient vers le centre à gauche
-        case CNY_ST_FR:
-        case CNY_ST_BR:
-        case CNY_ST_RALL:
-          cny_state = CNY_POST_STR;
-          cny_state_timer = millis();
-          move(AVANT_GAUCHE_FORT);
-          break;
-      }
-    } else {
-      Position adversaire = 0;
-      adversaire |= position(VISION_GAUCHE) & FLAG_TL;
-      adversaire |= position(VISION_CENTRE) & FLAG_TC;
-      adversaire |= position(VISION_DROIT) & FLAG_TR;
-
-      if (etat_ia == RECHERCHE) {
-        switch (adversaire) {
-          // zone 1
-          case FLAG_LOIN & FLAG_TL:
-            etat_ia = ATTAQUE;
-          // zone 2
-          case FLAG_LOIN & FLAG_TC:
-          case FLAG_LOIN & (FLAG_TL | FLAG_TC):
-            move(GAUCHE);
-            break;
-
-          // zone 3
-          case FLAG_LOIN & FLAG_TR:
-          case FLAG_LOIN & (FLAG_TC | FLAG_TR):
-            move(AVANT);
-            etat_ia = ATTAQUE;
-            break;
-
-          // zone 4
-          case FLAG_PROCHE & FLAG_TL:
-          case FLAG_PROCHE & (FLAG_TL | FLAG_TC):
-          case (FLAG_PROCHE & FLAG_TL) | (FLAG_LOIN & FLAG_TC):
-          case (FLAG_LOIN & FLAG_TL) | (FLAG_PROCHE & FLAG_TC):
-            move(GAUCHE);
-            break;
-
-          // zone 5
-          case FLAG_PROCHE & FLAG_TC:
-            move(AVANT);
-            etat_ia = ATTAQUE;
-            break;
-
-          // zone 6
-          case FLAG_PROCHE & FLAG_TR:
-          case FLAG_PROCHE & (FLAG_TC | FLAG_TR):
-          case (FLAG_LOIN & FLAG_TC) | (FLAG_PROCHE & FLAG_TR):
-          case (FLAG_PROCHE & FLAG_TC) | (FLAG_LOIN & FLAG_TR):
-            move(DROITE);
-            etat_ia = ATTAQUE;
-            break;
-
-          // autre, incohérent ou inconnu
-          case 0:
-          default:
-            move(GAUCHE);
-            break;
-        }
-      } else {
-        switch (adversaire) {
-          // zone 1
-          case FLAG_LOIN & FLAG_TL:
-            move(GAUCHE);
-            break;
-
-          // zone 2
-          case FLAG_LOIN & FLAG_TC:
-          case FLAG_LOIN & (FLAG_TL | FLAG_TC):
-            move(AVANT_DROITE);
-            break;
-
-          // zone 3
-          case FLAG_LOIN & FLAG_TR:
-          case FLAG_LOIN & (FLAG_TC | FLAG_TR):
-            move(AVANT);
-            break;
-
-          // zone 4
-          case FLAG_PROCHE & FLAG_TL:
-          case FLAG_PROCHE & (FLAG_TL | FLAG_TC):
-          case (FLAG_PROCHE & FLAG_TL) | (FLAG_LOIN & FLAG_TC):
-          case (FLAG_LOIN & FLAG_TL) | (FLAG_PROCHE & FLAG_TC):
-            move(GAUCHE);
-            break;
-
-          // zone 5
-          case FLAG_PROCHE & FLAG_TC:
-            move(AVANT_LENT);
-            break;
-
-          // zone 6
-          case FLAG_PROCHE & FLAG_TR:
-          case FLAG_PROCHE & (FLAG_TC | FLAG_TR):
-          case (FLAG_LOIN & FLAG_TC) | (FLAG_PROCHE & FLAG_TR):
-          case (FLAG_PROCHE & FLAG_TC) | (FLAG_LOIN & FLAG_TR):
-            move(AVANT_DROITE_FORT);
-            break;
-
-          // autre, incohérent ou inconnu
-          case 0:
-          default:
-            move(DROITE);
-            break;
-        }
-      }
+      // recentrage
+      default:
+        handle_recentrage();
+        break;
     }
   }
 }
@@ -474,7 +512,19 @@ void move(Direction direction) {
   }
 }
 
-Position position(Vision vision) {
+void seek_adversaire() {
+  if (millis() - state_timer > HC_MESURE_DELAY) {
+    move(STOP);
+    state_timer = millis();
+
+    adversaire = 0;
+    adversaire |= position(VISION_GAUCHE) & FLAG_TL;
+    adversaire |= position(VISION_CENTRE) & FLAG_TC;
+    adversaire |= position(VISION_DROIT) & FLAG_TR;
+  }
+}
+
+PositionFlags position(Vision vision) {
   int pin_echo, pin_trigger;
   switch (vision) {
     case VISION_GAUCHE:
