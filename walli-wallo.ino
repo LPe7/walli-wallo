@@ -35,6 +35,8 @@
 #define FLAG_TC     0b001100
 #define FLAG_TR     0b000011
 
+#define HC_MESURE_DELAY 200
+
 // constantes capteurs infrarouges (Bxx et CNY_xxx)
 #define PIN_BFL A0
 #define PIN_BFR A5
@@ -119,6 +121,7 @@ Etat_ia etat_ia = RECHERCHE;
 Servo servo_r, servo_l;
 CnyState cny_state = CNY_ST_NONE;
 unsigned long cny_state_timer = 0;
+unsigned long hc_state_timer = 0;
 
 void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
@@ -301,9 +304,10 @@ void loop() {
       }
     } else {
       Position adversaire = 0;
+
       adversaire |= position(VISION_GAUCHE) & FLAG_TL;
       adversaire |= position(VISION_CENTRE) & FLAG_TC;
-      adversaire |= position(VISION_DROIT) & FLAG_TR;
+      adversaire |= position(VISION_DROIT) & FLAG_TR; 
 
       if (etat_ia == RECHERCHE) {
         switch (adversaire) {
@@ -313,7 +317,7 @@ void loop() {
           // zone 2
           case FLAG_LOIN & FLAG_TC:
           case FLAG_LOIN & (FLAG_TL | FLAG_TC):
-            move(GAUCHE);
+            move(AVANT_GAUCHE);
             break;
 
           // zone 3
@@ -325,31 +329,31 @@ void loop() {
 
           // zone 4
           case FLAG_PROCHE & FLAG_TL:
-          case FLAG_PROCHE & (FLAG_TL | FLAG_TC):
           case (FLAG_PROCHE & FLAG_TL) | (FLAG_LOIN & FLAG_TC):
           case (FLAG_LOIN & FLAG_TL) | (FLAG_PROCHE & FLAG_TC):
-            move(GAUCHE);
+            move(AVANT_GAUCHE_FORT);
             break;
 
           // zone 5
           case FLAG_PROCHE & FLAG_TC:
+          case FLAG_PROCHE & (FLAG_TL | FLAG_TC):
+          case FLAG_PROCHE & (FLAG_TC | FLAG_TR):
             move(AVANT);
             etat_ia = ATTAQUE;
             break;
 
           // zone 6
           case FLAG_PROCHE & FLAG_TR:
-          case FLAG_PROCHE & (FLAG_TC | FLAG_TR):
           case (FLAG_LOIN & FLAG_TC) | (FLAG_PROCHE & FLAG_TR):
           case (FLAG_PROCHE & FLAG_TC) | (FLAG_LOIN & FLAG_TR):
-            move(DROITE);
+            move(AVANT_DROITE);
             etat_ia = ATTAQUE;
             break;
 
           // autre, incohérent ou inconnu
           case 0:
           default:
-            move(GAUCHE);
+            move(AVANT);
             break;
         }
       } else {
@@ -357,6 +361,7 @@ void loop() {
           // zone 1
           case FLAG_LOIN & FLAG_TL:
             move(GAUCHE);
+            etat_ia = RECHERCHE;
             break;
 
           // zone 2
@@ -376,7 +381,7 @@ void loop() {
           case FLAG_PROCHE & (FLAG_TL | FLAG_TC):
           case (FLAG_PROCHE & FLAG_TL) | (FLAG_LOIN & FLAG_TC):
           case (FLAG_LOIN & FLAG_TL) | (FLAG_PROCHE & FLAG_TC):
-            move(GAUCHE);
+            move(AVANT_GAUCHE);
             break;
 
           // zone 5
@@ -395,12 +400,16 @@ void loop() {
           // autre, incohérent ou inconnu
           case 0:
           default:
-            move(DROITE);
+            move(AVANT_LENT);
             break;
         }
       }
     }
   }
+
+  // debugging
+  if (etat_ia == RECHERCHE) digitalWrite(LED_BUILTIN, HIGH);
+  else digitalWrite(LED_BUILTIN, LOW);
 }
 
 /// Fonctions utilitaires
@@ -505,5 +514,5 @@ Position position(Vision vision) {
     return(FLAG_PROCHE);
 
   else
-    return(0);
+    return(0); 
 }
