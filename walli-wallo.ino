@@ -438,13 +438,12 @@ void setup() {
   
   check_voltage();
 
-  for (byte i = 0; i<4; i++) {
+  for (byte i = 0; i<5; i++) {
     digitalWrite(LED_BUILTIN, HIGH);
     delay(500);
     digitalWrite(LED_BUILTIN, LOW);
     delay(500);
   }
-  digitalWrite(LED_BUILTIN, HIGH);
 
   servo_r.attach(PIN_SERVO_R);
   servo_r.writeMicroseconds(SR_STOP);
