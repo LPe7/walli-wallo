@@ -35,8 +35,6 @@
 #define FLAG_TC     0b001100
 #define FLAG_TR     0b000011
 
-#define HC_MESURE_DELAY 200
-
 // constantes capteurs infrarouges (Bxx et CNY_xxx)
 #define PIN_BFL A0
 #define PIN_BFR A5
@@ -48,9 +46,32 @@
 #define FLAG_BBL 0b0100
 #define FLAG_BBR 0b1000
 
-#define CNY_POST_DELAY 1000
-#define CNY_SEUIL 800
+#define CNY_POST_DELAY_DROITE 1000
+#define CNY_POST_DELAY_GAUCHE 2000
+#define CNY_SEUIL 880
 #define CNY_READ(which) (analogRead(which) > CNY_SEUIL) // macro pour lire la valeur d'un CNY
+
+// constantes monitoring batterie (BAT_xxx)
+#define PIN_BAT A6
+#define BAT_MINIMUM 900 // 7.0V
+#define BAT_DELAY 3000
+
+// constantes de temps
+
+#define HC_MESURE_DELAY 200
+#define OUTSIDE_DELAY 4000
+#define ATTAQUE_DEFAULT_DELAY 4000
+
+/// Actions de la LED
+// - au démarrage
+//   - allumée: en attente du début
+//   - 3 fois 0.5s/0.5s: attente 3s avant démarrage
+// - en fonctionnement
+//   - allumée: mode recherche
+//   - éteinte: mode attaque ou recentrage
+// - arrêt
+//   - 4 fois 0.1s + 1s éteinte: batterie faible
+//   - 0.25s/0.25s: arrêt car 4s hors terrain
 
 /// Déclaration des enums d'état et de commande
 
@@ -108,6 +129,7 @@ enum State {
   CNY_ST_OUTSIDE,
 
   ATTAQUE,
+  ATTAQUE_DEFAULT,
   RECHERCHE,
 };
 
@@ -117,21 +139,34 @@ enum State {
 Servo servo_r, servo_l;
 State state = RECHERCHE;
 unsigned long state_timer = 0;
+unsigned long position_timer = 0;
+unsigned long voltage_timer = 0;
 PositionFlags adversaire = 0;
+
+// monitoring de la batterie
+void check_voltage() {
+  if (millis() - voltage_timer > BAT_DELAY || voltage_timer == 0) {
+    voltage_timer = millis();
+
+    if (analogRead(PIN_BAT) < BAT_MINIMUM) {
+      servo_l.detach();
+      servo_r.detach();
+      
+      while (true) {
+        for (int i = 0; i<3; i++) {
+          digitalWrite(LED_BUILTIN, HIGH);
+          delay(100);
+          digitalWrite(LED_BUILTIN, LOW);
+          delay(100);
+        }
+        delay(1000);
+      }
+    }
+  }
+}
 
 // fonctions de mode
 void handle_cny(CnyFlags cny_flags) {
-  // pousser jusqu'au bout si on est en mode attaque
-  if (state == ATTAQUE) {
-    switch (cny_flags) {
-      case FLAG_BFL:
-      case FLAG_BFR:
-      case FLAG_BFL | FLAG_BFR:
-        handle_attaque();
-        return;
-    }
-  }
-
   switch(cny_flags) {
 
     // 1 capteur
@@ -219,23 +254,18 @@ void handle_cny(CnyFlags cny_flags) {
 
     case FLAG_BBL | FLAG_BBR | FLAG_BFL | FLAG_BFR:
       if (state == CNY_ST_OUTSIDE) {
-        if (millis() - state_timer > 4000) {
+        if (millis() - state_timer > OUTSIDE_DELAY) {
           move(STOP);
           while(true) {
             // si on est entièrement dehors depuis plus de 4 secondes, alors on s'arrête
             digitalWrite(LED_BUILTIN, HIGH);
-            delay(100);
-            digitalWrite(LED_BUILTIN, LOW);
-            delay(50);
-            digitalWrite(LED_BUILTIN, HIGH);
-            delay(100);
+            delay(250);
             digitalWrite(LED_BUILTIN, LOW);
             delay(250);
           }
         }
       } else {
         state = CNY_ST_OUTSIDE;
-        state_timer = millis();
       }
       break;
 
@@ -248,8 +278,14 @@ void handle_recentrage() {
   switch (state) {
     // une fois le recentrage terminé
     case CNY_POST_STL:
+      if (millis() - state_timer > CNY_POST_DELAY_GAUCHE) {
+        state = RECHERCHE;
+        state_timer = millis();
+      }
+      break;
+
     case CNY_POST_STR:
-      if (millis() - state_timer > CNY_POST_DELAY) {
+      if (millis() - state_timer > CNY_POST_DELAY_DROITE) {
         state = RECHERCHE;
         state_timer = millis();
       }
@@ -322,7 +358,13 @@ void handle_attaque() {
     // autre, incohérent ou inconnu
     case 0:
     default:
-      move(AVANT_LENT);
+      if (state == ATTAQUE) {
+        move(AVANT_LENT);
+        state_timer = millis();
+        state = ATTAQUE_DEFAULT;
+      } else if (millis() - state_timer > ATTAQUE_DEFAULT_DELAY) {
+        state = RECHERCHE;
+      }
       break;
   }
 }
@@ -382,9 +424,10 @@ void handle_recherche() {
 void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, HIGH);
+  check_voltage();
 
-  pinMode(PIN_TR_TRG, OUTPUT);
-  pinMode(PIN_TR_ECH, INPUT);
+  //pinMode(PIN_TR_TRG, OUTPUT);
+  //pinMode(PIN_TR_ECH, INPUT);
   pinMode(PIN_TC_TRG, OUTPUT);
   pinMode(PIN_TC_ECH, INPUT);
   pinMode(PIN_TL_TRG, OUTPUT);
@@ -392,8 +435,10 @@ void setup() {
 
   // attendre qu'une feuille blanche soit glissée sous le CNY de derrière droite
   while (!CNY_READ(PIN_BBR));
+  
+  check_voltage();
 
-  for (byte i = 0; i<3; i++) {
+  for (byte i = 0; i<4; i++) {
     digitalWrite(LED_BUILTIN, HIGH);
     delay(500);
     digitalWrite(LED_BUILTIN, LOW);
@@ -407,15 +452,17 @@ void setup() {
   servo_l.writeMicroseconds(SL_STOP);
 
   // faire tomber la plaque
-  move(AVANT);
+  move(AVANT_DROITE_FORT);
   delay(200);
-  move(ARRIERE);
+  move(ARRIERE_GAUCHE_FORT);
   delay(200);
   move(STOP);
   delay(100);
 }
 
 void loop() {
+  check_voltage();
+
   CnyFlags cny_flags = 0;
   if (CNY_READ(PIN_BFL)) cny_flags |= FLAG_BFL;
   if (CNY_READ(PIN_BFR)) cny_flags |= FLAG_BFR;
@@ -431,6 +478,7 @@ void loop() {
         break;
 
       case ATTAQUE:
+      case ATTAQUE_DEFAULT:
         handle_attaque();
         break;
 
@@ -518,9 +566,10 @@ void move(Direction direction) {
 }
 
 void seek_adversaire() {
-  if (millis() - state_timer > HC_MESURE_DELAY) {
-    move(STOP);
-    state_timer = millis();
+  if (millis() - position_timer > HC_MESURE_DELAY || position_timer == 0) {
+    if (state == RECHERCHE)
+      move(STOP);
+    position_timer = millis();
 
     adversaire = 0;
     adversaire |= position(VISION_GAUCHE) & FLAG_TL;
